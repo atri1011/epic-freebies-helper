@@ -673,9 +673,14 @@ class _OpenAICompatibleAsyncModels(_GLMAsyncModels):
         else:
             endpoint = self._settings.GLM_BASE_URL.rstrip("/")
 
-        if not endpoint.endswith("/chat/completions"):
-            endpoint = f"{endpoint}/chat/completions"
-        return endpoint
+        normalized = endpoint.lower()
+        if normalized.endswith("/chat/completions"):
+            return endpoint
+        if normalized.endswith("/v1"):
+            return f"{endpoint}/chat/completions"
+        if normalized.endswith("/openai/v1"):
+            return f"{endpoint}/chat/completions"
+        return f"{endpoint}/v1/chat/completions"
 
     def _resolve_api_key(self) -> str:
         if self._provider_name == "gemini":
