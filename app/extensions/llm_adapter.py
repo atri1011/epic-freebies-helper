@@ -331,10 +331,64 @@ def _coerce_payload_for_schema(payload: dict[str, Any], schema: Any, text: str) 
     challenge_prompt = str(payload.get("challenge_prompt") or "")
     inferred_rule = str(payload.get("inferred_rule") or "")
 
-    if "paths" in fields and "paths" in payload:
-        payload.setdefault("challenge_prompt", challenge_prompt)
-        payload.setdefault("inferred_rule", inferred_rule)
-        return payload
+    if "paths" in fields:
+        if "paths" in payload:
+            payload.setdefault("challenge_prompt", challenge_prompt)
+            payload.setdefault("inferred_rule", inferred_rule)
+            return payload
+
+        drag_payload = None
+        if "start_point" in payload and "end_point" in payload:
+            drag_payload = _build_drag_payload(
+                payload.get("start_point"),
+                payload.get("end_point"),
+                challenge_prompt=challenge_prompt,
+                inferred_rule=inferred_rule,
+            )
+        elif "source" in payload and "target" in payload:
+            drag_payload = _build_drag_payload(
+                payload.get("source"),
+                payload.get("target"),
+                challenge_prompt=challenge_prompt,
+                inferred_rule=inferred_rule,
+            )
+        elif "from" in payload and "to" in payload:
+            drag_payload = _build_drag_payload(
+                payload.get("from"),
+                payload.get("to"),
+                challenge_prompt=challenge_prompt,
+                inferred_rule=inferred_rule,
+            )
+        elif isinstance(payload.get("points"), list) and len(payload["points"]) >= 2:
+            drag_payload = _build_drag_payload(
+                payload["points"][0],
+                payload["points"][1],
+                challenge_prompt=challenge_prompt,
+                inferred_rule=inferred_rule,
+            )
+        else:
+            drag_points = _extract_drag_points_from_text(text)
+            if drag_points:
+                drag_payload = _build_drag_payload(
+                    drag_points[0],
+                    drag_points[1],
+                    challenge_prompt=challenge_prompt,
+                    inferred_rule=inferred_rule,
+                )
+            elif isinstance(payload.get("points"), list):
+                normalized_points = [
+                    point for point in (_coerce_point(item) for item in payload["points"]) if point
+                ]
+                if len(normalized_points) >= 2:
+                    drag_payload = _build_drag_payload(
+                        normalized_points[0],
+                        normalized_points[1],
+                        challenge_prompt=challenge_prompt,
+                        inferred_rule=inferred_rule,
+                    )
+
+        if drag_payload:
+            return drag_payload
 
     if "points" in fields:
         if "points" in payload:
