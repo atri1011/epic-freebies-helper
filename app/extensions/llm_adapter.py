@@ -662,6 +662,87 @@ class GLMCompatibleGenAIClient:
         self.aio = _GLMAsyncNamespace(settings, self._storage)
 
 
+class _OpenAICompatibleAsyncModels(_GLMAsyncModels):
+    def __init__(self, settings: Any, storage: dict[str, dict[str, Any]], *, provider_name: str):
+        super().__init__(settings, storage)
+        self._provider_name = provider_name
+
+    def _resolve_endpoint(self) -> str:
+        if self._provider_name == "gemini":
+            endpoint = self._settings.GEMINI_BASE_URL.rstrip("/")
+        else:
+            endpoint = self._settings.GLM_BASE_URL.rstrip("/")
+
+        if not endpoint.endswith("/chat/completions"):
+            endpoint = f"{endpoint}/chat/completions"
+        return endpoint
+
+    def _resolve_api_key(self) -> str:
+        if self._provider_name == "gemini":
+            return self._settings.GEMINI_API_KEY.get_secret_value()
+        return self._settings.GLM_API_KEY.get_secret_value()
+
+    def _log_error(self, response: httpx.Response):
+        body = response.text[:2000]
+        code = ""
+        message = ""
+        with suppress(Exception):
+            payload = response.json()
+            error = payload.get("error") or {}
+            code = str(error.get("code") or "")
+            message = str(error.get("message") or "")
+
+        logger.error(
+            "{} request failed | status={} | code={} | body= {}",
+            self._provider_name.upper(),
+            response.status_code,
+            code,
+            message or body,
+        )
+
+    async def generate_content(self, model: str, contents: Any, **kwargs) -> _PatchedResponse:
+        config = kwargs.pop("config", None)
+        if config is None:
+            raise ValueError(f"config is required for {self._provider_name} compatibility mode")
+
+        endpoint = self._resolve_endpoint()
+        payload = self._build_payload(model=model, contents=contents, config=config, kwargs=kwargs)
+        headers = {
+            "Authorization": f"Bearer {self._resolve_api_key()}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0)) as client:
+            response = await client.post(endpoint, headers=headers, json=payload)
+            if response.is_error:
+                self._log_error(response)
+                response.raise_for_status()
+            data = response.json()
+
+        text = _normalize_glm_response_text(self._extract_text(data))
+        parsed = self._parse_response(text, config)
+        return _PatchedResponse(text=text, parsed=parsed, raw=data)
+
+
+class _OpenAICompatibleAsyncNamespace:
+    def __init__(self, settings: Any, storage: dict[str, dict[str, Any]], *, provider_name: str):
+        self.files = _GLMAsyncFiles(storage)
+        self.models = _OpenAICompatibleAsyncModels(settings, storage, provider_name=provider_name)
+
+
+class OpenAICompatibleGenAIClient:
+    def __init__(self, *args, provider_name: str = "gemini", **kwargs):
+        from settings import settings
+
+        self._storage: dict[str, dict[str, Any]] = {}
+        self.aio = _OpenAICompatibleAsyncNamespace(settings, self._storage, provider_name=provider_name)
+
+
+def _is_google_official_base_url(base_url: str) -> bool:
+    normalized = base_url.strip().lower()
+    return "googleapis.com" in normalized or normalized.startswith("https://generativelanguage.googleapis.com")
+
+
 def apply_gemini_patch(settings: Any):
     if not settings.GEMINI_API_KEY:
         return
@@ -670,19 +751,24 @@ def apply_gemini_patch(settings: Any):
         from google import genai
         from google.genai import types
 
+        base_url = settings.GEMINI_BASE_URL.rstrip("/")
+        if not _is_google_official_base_url(base_url):
+            class GeminiCompatibleGenAIClient(OpenAICompatibleGenAIClient):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, provider_name="gemini", **kwargs)
+
+            genai.Client = GeminiCompatibleGenAIClient
+            logger.info(
+                f"🚀 Gemini(OpenAI-compatible) 回退补丁已应用 | 模型: {settings.GEMINI_MODEL} | 地址: {base_url}"
+            )
+            return
+
         orig_init = genai.Client.__init__
 
         def new_init(self, *args, **kwargs):
             kwargs["api_key"] = settings.GEMINI_API_KEY.get_secret_value()
-
-            base_url = settings.GEMINI_BASE_URL.rstrip("/")
-            if base_url.endswith("/v1"):
-                base_url = base_url[:-3]
-            if not base_url.endswith("/gemini"):
-                base_url = f"{base_url}/gemini"
-
             kwargs["http_options"] = types.HttpOptions(base_url=base_url)
-            logger.info(f"🚀 Gemini 兼容补丁已应用 | 模型: {settings.GEMINI_MODEL} | 地址: {base_url}")
+            logger.info(f"🚀 Gemini 官方接口补丁已应用 | 模型: {settings.GEMINI_MODEL} | 地址: {base_url}")
             orig_init(self, *args, **kwargs)
 
         genai.Client.__init__ = new_init
@@ -713,7 +799,7 @@ def apply_gemini_patch(settings: Any):
 
         genai.files.AsyncFiles.upload = patched_upload
         genai.models.AsyncModels.generate_content = patched_generate
-        logger.info("🚀 Gemini 文件上传兼容补丁加载成功")
+        logger.info("🚀 Gemini 官方文件上传兼容补丁加载成功")
     except Exception as exc:
         logger.error(f"❌ Gemini 兼容补丁加载失败: {exc}")
 
