@@ -440,7 +440,7 @@ dev = [
 requires-dist = [
     { name = "apscheduler", specifier = ">=3.11.0" },
     { name = "celery", extras = ["redis"], specifier = ">=5.4.0" },
-    { name = "hcaptcha-challenger", extras = ["camoufox"], specifier = ">=0.18.10" },
+    { name = "hcaptcha-challenger", extras = ["camoufox"], specifier = "==0.18.13" },
     { name = "pydantic-settings", specifier = ">=2.8.1" },
 ]
 
